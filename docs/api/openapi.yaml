@@ -1,0 +1,2819 @@
+openapi: 3.0.3
+info:
+  title: DevMentor API
+  version: 0.1.0-draft
+  description: |
+    HTTP contract between the DevMentor Web Application and the Backend API.
+
+    **Status: DRAFT V1, not implemented.** Endpoint names, fields and
+    status codes are proposals derived from the
+    [requirements](../../README.md#1-requirements---invest-use-cases-and-acceptance-criteria),
+    [use cases](../03-use-cases.md) and
+    [business rules](../requirements/business-rules.md). Rule IDs
+    (`BR-xxx`), story IDs (`USxx`) and use case IDs (`UCxx`) in the
+    descriptions give traceability.
+
+    Conventions (see [API documentation](README.md)):
+    - JSON in and out; errors use `application/problem+json`.
+    - Authenticated calls send `Authorization: Bearer <accessToken>`.
+    - Learner learning APIs return `403` with code `ONBOARDING_REQUIRED`
+      until the first competency profile is confirmed (BR-032).
+    - A resource owned by another user, or unpublished content, returns
+      `404` (BR-005).
+servers:
+  - url: /api/v1
+    description: Relative to the deployment host
+security:
+  - bearerAuth: []
+tags:
+  - name: Authentication
+    description: Register, log in, log out, refresh session, current user (US01–US03)
+  - name: Onboarding
+    description: Survey, competency assessment, competency profile (US04, US32, US33; UC03)
+  - name: Learning Paths
+    description: My learning paths and path detail (US08, US13, US25; UC06)
+  - name: Lessons
+    description: Lesson content, video checkpoints, notes, completion (US14; UC08)
+  - name: Exercises
+    description: Practice exercises and coding challenges (US06, US15)
+  - name: Executions
+    description: Run code in the sandbox (US17; UC10)
+  - name: Submissions
+    description: Submit code, verdict and evaluation, history (US07, US18; UC05, UC09)
+  - name: Assessments
+    description: Quiz attempts and answering any attempt (US04, US05; UC03, UC04)
+  - name: AI Mentor
+    description: Explain, Ask, Hint, Debug, Review (US19–US23; UC11–UC13)
+  - name: Learning
+    description: Recommendations, mastery, knowledge gaps (US09–US11)
+  - name: Dashboard
+    description: Overview and to-do (US24, US25, US27; UC14)
+  - name: Admin
+    description: Content, test cases, questions, users, statistics and monitoring (US28–US31; UC15–UC17). Admin screens are not designed yet; this group follows the current requirements and may change.
+
+paths:
+  # ---------------------------------------------------------------- Auth
+  /auth/register:
+    post:
+      tags: [Authentication]
+      operationId: register
+      summary: Register a learner account
+      description: |
+        Creates an active `LEARNER` account and starts a session; the client
+        then opens the onboarding survey (UC01, BR-001, BR-003, BR-032).
+        Google and GitHub sign-in are not available in V1.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RegisterRequest' }
+      responses:
+        '201':
+          description: Account created and logged in
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthSession' }
+        '409':
+          description: Email already registered (`EMAIL_TAKEN`)
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+
+  /auth/login:
+    post:
+      tags: [Authentication]
+      operationId: login
+      summary: Log in
+      description: |
+        Returns tokens and the current user. A learner whose onboarding is
+        not finished is sent back to the step in `user.onboarding`
+        (BR-032). Wrong credentials and locked accounts get the same error
+        (BR-004). Limited by NFR-SEC-003.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoginRequest' }
+      responses:
+        '200':
+          description: Logged in
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthSession' }
+        '401':
+          description: Invalid credentials or locked account (`INVALID_CREDENTIALS`)
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+
+  /auth/refresh:
+    post:
+      tags: [Authentication]
+      operationId: refreshSession
+      summary: Rotate the refresh token and get a new access token
+      description: Refresh tokens rotate on every use (NFR-SEC-001).
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RefreshRequest' }
+      responses:
+        '200':
+          description: New tokens
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthSession' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /auth/logout:
+    post:
+      tags: [Authentication]
+      operationId: logout
+      summary: Log out and revoke the refresh token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RefreshRequest' }
+      responses:
+        '204': { description: Logged out }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /users/me:
+    get:
+      tags: [Authentication]
+      operationId: getCurrentUser
+      summary: Current user with onboarding state
+      responses:
+        '200':
+          description: Current user
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CurrentUser' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  # ---------------------------------------------------------- Onboarding
+  /onboarding/status:
+    get:
+      tags: [Onboarding]
+      operationId: getOnboardingStatus
+      summary: Where the learner is in onboarding
+      description: Used after login and before any learning screen to resume onboarding (BR-032).
+      responses:
+        '200':
+          description: Onboarding status
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OnboardingStatus' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /onboarding/topics:
+    get:
+      tags: [Onboarding]
+      operationId: listSurveyTopics
+      summary: Topics to self-assess for a language
+      description: The topics shown in survey question 4 (BR-031).
+      parameters:
+        - name: language
+          in: query
+          required: true
+          schema: { $ref: '#/components/schemas/Language' }
+      responses:
+        '200':
+          description: Topics of the language
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/Topic' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /onboarding/surveys:
+    post:
+      tags: [Onboarding]
+      operationId: submitSurvey
+      summary: Submit the onboarding survey
+      description: |
+        Starts onboarding for a language: first onboarding after
+        registration, or "Create new path" (BR-031, BR-033). A language with
+        an `IN_PROGRESS` path is rejected.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SurveyRequest' }
+      responses:
+        '201':
+          description: Survey saved; includes the assessment size
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Survey' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409':
+          description: The language already has a path in progress (`PATH_IN_PROGRESS`)
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /competency-assessments:
+    post:
+      tags: [Onboarding]
+      operationId: startCompetencyAssessment
+      summary: Generate the competency assessment and start an attempt
+      description: |
+        The LLM generates the questions from the survey: 3 per "Unsure"
+        topic, 1 per "Confident" topic, none for "Not learned"
+        (BR-016, BR-034). Calling it again for the same survey while the
+        profile is not confirmed is a retake with new questions; the latest
+        submitted attempt replaces the profile. An unsubmitted attempt of
+        the same survey is returned instead of a new one.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [surveyId]
+              properties:
+                surveyId: { $ref: '#/components/schemas/Uuid' }
+                retake:
+                  type: boolean
+                  default: false
+                  description: true when the learner pressed "Retake the assessment" on the profile.
+      responses:
+        '201':
+          description: Attempt with generated questions (no correct answers)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AssessmentAttempt' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Profile already confirmed (`PROFILE_CONFIRMED`)
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '503': { $ref: '#/components/responses/AiUnavailable' }
+
+  /competency-profiles/{profileId}:
+    get:
+      tags: [Onboarding]
+      operationId: getCompetencyProfile
+      summary: Competency profile with score and handling per topic
+      parameters:
+        - $ref: '#/components/parameters/ProfileId'
+      responses:
+        '200':
+          description: Competency profile
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CompetencyProfile' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /competency-profiles/{profileId}/topics:
+    patch:
+      tags: [Onboarding]
+      operationId: updateProfileTopics
+      summary: Change how topics are handled before confirming
+      description: Only while the profile is `DRAFT` (BR-025, BR-032; US33).
+      parameters:
+        - $ref: '#/components/parameters/ProfileId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [topics]
+              properties:
+                topics:
+                  type: array
+                  minItems: 1
+                  items:
+                    type: object
+                    required: [conceptId, handling]
+                    properties:
+                      conceptId: { $ref: '#/components/schemas/Uuid' }
+                      handling: { $ref: '#/components/schemas/TopicHandling' }
+      responses:
+        '200':
+          description: Updated profile
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CompetencyProfile' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Profile already confirmed (`PROFILE_CONFIRMED`)
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /competency-profiles/{profileId}/confirm:
+    post:
+      tags: [Onboarding]
+      operationId: confirmCompetencyProfile
+      summary: Confirm the profile and create the learning path
+      description: |
+        Chooses one published course of the language by rules and builds
+        the path: skipped topics → `SKIPPED`, review topics → "Quick
+        review", weak topics earlier where prerequisites allow. The LLM
+        writes the item reasons only (BR-025, AS-07).
+      parameters:
+        - $ref: '#/components/parameters/ProfileId'
+      responses:
+        '201':
+          description: Profile confirmed and path created
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [profile, path]
+                properties:
+                  profile: { $ref: '#/components/schemas/CompetencyProfile' }
+                  path: { $ref: '#/components/schemas/LearningPathSummary' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Already confirmed (`PROFILE_CONFIRMED`) or no published course matches (`NO_MATCHING_COURSE`)
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  # ------------------------------------------------------ Learning paths
+  /learning-paths:
+    get:
+      tags: [Learning Paths]
+      operationId: listLearningPaths
+      summary: My learning paths, one per language
+      parameters:
+        - name: status
+          in: query
+          description: Filter; omit for all (BR-033)
+          schema: { $ref: '#/components/schemas/PathStatus' }
+      responses:
+        '200':
+          description: Paths
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/LearningPathSummary' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /learning-paths/{pathId}:
+    get:
+      tags: [Learning Paths]
+      operationId: getLearningPath
+      summary: Path detail with chapters and items
+      parameters:
+        - $ref: '#/components/parameters/PathId'
+      responses:
+        '200':
+          description: Path detail
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LearningPathDetail' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ------------------------------------------------------------- Lessons
+  /lessons/{lessonId}:
+    get:
+      tags: [Lessons]
+      operationId: getLesson
+      summary: Lesson content by type
+      description: |
+        Video lessons return a short-lived signed video URL, the resume
+        position and checkpoints without answers (BR-036). Skipped lessons
+        can be opened (BR-022).
+      parameters:
+        - $ref: '#/components/parameters/LessonId'
+      responses:
+        '200':
+          description: Lesson
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Lesson' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /lessons/{lessonId}/complete:
+    post:
+      tags: [Lessons]
+      operationId: completeLesson
+      summary: Mark a video or reading lesson complete
+      description: |
+        Only `VIDEO` and `READING` lessons are completed manually. Practice
+        and challenge lessons complete on an `ACCEPTED` submission; quiz
+        lessons on a submitted attempt (BR-022).
+      parameters:
+        - $ref: '#/components/parameters/LessonId'
+      responses:
+        '200':
+          description: Lesson progress and path progress
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LessonProgress' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Lesson type is not completed manually (`NOT_MANUALLY_COMPLETABLE`)
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  /lessons/{lessonId}/position:
+    put:
+      tags: [Lessons]
+      operationId: saveVideoPosition
+      summary: Save the video position for resuming
+      description: Used by "Continue learning" (BR-026). Clients send it periodically and on pause.
+      parameters:
+        - $ref: '#/components/parameters/LessonId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [videoPositionSeconds]
+              properties:
+                videoPositionSeconds: { type: integer, minimum: 0 }
+      responses:
+        '204': { description: Saved }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /lessons/{lessonId}/checkpoints/{checkpointId}/answer:
+    post:
+      tags: [Lessons]
+      operationId: answerCheckpoint
+      summary: Answer an in-video checkpoint question
+      description: Not scored; returns right/wrong feedback (BR-036).
+      parameters:
+        - $ref: '#/components/parameters/LessonId'
+        - name: checkpointId
+          in: path
+          required: true
+          schema: { $ref: '#/components/schemas/Uuid' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [selected]
+              properties:
+                selected:
+                  type: string
+                  description: Option key
+                  example: B
+      responses:
+        '200':
+          description: Feedback
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [correct, correctAnswer]
+                properties:
+                  correct: { type: boolean }
+                  correctAnswer: { type: string }
+                  explanation: { type: string, nullable: true }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /lessons/{lessonId}/notes:
+    get:
+      tags: [Lessons]
+      operationId: getLessonNotes
+      summary: The learner's private notes for a lesson
+      parameters:
+        - $ref: '#/components/parameters/LessonId'
+      responses:
+        '200':
+          description: Notes (empty content when none)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LessonNotes' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Lessons]
+      operationId: saveLessonNotes
+      summary: Save notes for a lesson
+      parameters:
+        - $ref: '#/components/parameters/LessonId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [content]
+              properties:
+                content: { type: string, maxLength: 20000 }
+      responses:
+        '200':
+          description: Saved notes
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LessonNotes' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  # ----------------------------------------------------------- Exercises
+  /exercises/{exerciseId}:
+    get:
+      tags: [Exercises]
+      operationId: getExercise
+      summary: Exercise or challenge for the Coding Workspace
+      description: Never includes hidden test content (BR-014).
+      parameters:
+        - $ref: '#/components/parameters/ExerciseId'
+      responses:
+        '200':
+          description: Exercise
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Exercise' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /exercises/{exerciseId}/submissions:
+    get:
+      tags: [Submissions]
+      operationId: listExerciseSubmissions
+      summary: The learner's submission history for an exercise
+      parameters:
+        - $ref: '#/components/parameters/ExerciseId'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: Submissions, newest first
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PageMeta'
+                  - type: object
+                    required: [items]
+                    properties:
+                      items:
+                        type: array
+                        items: { $ref: '#/components/schemas/SubmissionSummary' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ---------------------------------------------------------- Executions
+  /executions:
+    post:
+      tags: [Executions]
+      operationId: runCode
+      summary: Run code with custom input or the sample tests
+      description: |
+        No verdict and no effect on progress (BR-012). Returns `200` when
+        the run finishes within the synchronous threshold, otherwise `202`
+        and the client polls (NFR-EXEC-005). Limited to 10 runs/submissions
+        per minute (NFR-EXEC-006).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ExecutionRequest' }
+      responses:
+        '200':
+          description: Finished run
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Execution' }
+        '202':
+          description: Run queued; poll `GET /executions/{executionId}`
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Execution' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+
+  /executions/{executionId}:
+    get:
+      tags: [Executions]
+      operationId: getExecution
+      summary: Run result
+      parameters:
+        - name: executionId
+          in: path
+          required: true
+          schema: { $ref: '#/components/schemas/Uuid' }
+      responses:
+        '200':
+          description: Run
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Execution' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # --------------------------------------------------------- Submissions
+  /submissions:
+    post:
+      tags: [Submissions]
+      operationId: submitCode
+      summary: Submit a solution for grading
+      description: |
+        Runs every test case; verdict and score come only from test
+        results (BR-012, BR-013, BR-015). Returns `201` when graded within
+        the synchronous threshold, otherwise `202` with `status: PENDING`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SubmissionRequest' }
+      responses:
+        '201':
+          description: Graded submission
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Submission' }
+        '202':
+          description: Grading queued; poll `GET /submissions/{submissionId}`
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Submission' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+
+  /submissions/{submissionId}:
+    get:
+      tags: [Submissions]
+      operationId: getSubmission
+      summary: Submission with verdict and evaluation
+      parameters:
+        - $ref: '#/components/parameters/SubmissionId'
+      responses:
+        '200':
+          description: Submission
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Submission' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # --------------------------------------------------------- Assessments
+  /quizzes/{quizId}/attempts:
+    post:
+      tags: [Assessments]
+      operationId: startQuizAttempt
+      summary: Start (or resume) a quiz attempt
+      description: |
+        Returns the unsubmitted attempt if one exists; otherwise starts a
+        new one. Retakes are unlimited (BR-016).
+      parameters:
+        - name: quizId
+          in: path
+          required: true
+          schema: { $ref: '#/components/schemas/Uuid' }
+      responses:
+        '201':
+          description: Attempt started or resumed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AssessmentAttempt' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /assessment-attempts/{attemptId}:
+    get:
+      tags: [Assessments]
+      operationId: getAttempt
+      summary: Get an attempt (to resume it)
+      parameters:
+        - $ref: '#/components/parameters/AttemptId'
+      responses:
+        '200':
+          description: Attempt
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AssessmentAttempt' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [Assessments]
+      operationId: saveAnswers
+      summary: Save answers of an unsubmitted attempt
+      parameters:
+        - $ref: '#/components/parameters/AttemptId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [answers]
+              properties:
+                answers:
+                  type: array
+                  minItems: 1
+                  items: { $ref: '#/components/schemas/Answer' }
+      responses:
+        '200':
+          description: Attempt with saved answers
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AssessmentAttempt' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/AttemptSubmitted' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /assessment-attempts/{attemptId}/submit:
+    post:
+      tags: [Assessments]
+      operationId: submitAttempt
+      summary: Submit and score an attempt
+      description: |
+        Competency assessment: no pass/fail; the result links to the draft
+        competency profile (`profileId`). Quiz: pass or not by the
+        configurable threshold; the review shows correct answers and AI
+        Mentor explanations; practice may be added to the path
+        (`pathUpdate`, BR-035). Mastery is updated in both cases (BR-023).
+      parameters:
+        - $ref: '#/components/parameters/AttemptId'
+      responses:
+        '200':
+          description: Scored result
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AttemptResult' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/AttemptSubmitted' }
+
+  # ----------------------------------------------------------- AI Mentor
+  /ai/explain:
+    post:
+      tags: [AI Mentor]
+      operationId: aiExplain
+      summary: Explain a concept or a selected passage
+      description: Uses the lesson and current video position as context (BR-018; US19).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ExplainRequest' }
+      responses:
+        '200':
+          description: Explanation
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AiMessage' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '503': { $ref: '#/components/responses/AiUnavailable' }
+
+  /ai/ask:
+    post:
+      tags: [AI Mentor]
+      operationId: aiAsk
+      summary: Ask the AI Mentor a question (streamed)
+      description: |
+        Streams the answer as Server-Sent Events (NFR-AI-001): `delta`
+        events carry text chunks; a final `done` event carries the whole
+        `AiMessage`; an `error` event carries a `Problem`. Off-topic
+        questions are declined (BR-018; US23).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AskRequest' }
+      responses:
+        '200':
+          description: Event stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                example: |
+                  event: delta
+                  data: {"text":"Thử nghĩ xem: "}
+
+                  event: done
+                  data: {"id":"5c0e...","conversationId":"0a1b...","mode":"ASK","content":"..."}
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '503': { $ref: '#/components/responses/AiUnavailable' }
+
+  /ai/hint:
+    post:
+      tags: [AI Mentor]
+      operationId: aiHint
+      summary: Get the next hint level
+      description: |
+        At most 3 levels, never a complete solution (BR-019). Unavailable
+        for a challenge until it is `ACCEPTED` (BR-017).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/HintRequest' }
+      responses:
+        '200':
+          description: Hint
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AiMessage' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/AiLocked' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '503': { $ref: '#/components/responses/AiUnavailable' }
+
+  /ai/debug:
+    post:
+      tags: [AI Mentor]
+      operationId: aiDebug
+      summary: Explain a failing run or submission
+      description: Uses only sample test data (BR-014, BR-019; US21).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DebugRequest' }
+      responses:
+        '200':
+          description: Error analysis
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AiMessage' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/AiLocked' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '503': { $ref: '#/components/responses/AiUnavailable' }
+
+  /ai/review:
+    post:
+      tags: [AI Mentor]
+      operationId: aiReview
+      summary: Review submitted code
+      description: Never changes the verdict or score (BR-020; US22).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [submissionId]
+              properties:
+                submissionId: { $ref: '#/components/schemas/Uuid' }
+      responses:
+        '200':
+          description: Review
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AiMessage' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/AiLocked' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '503': { $ref: '#/components/responses/AiUnavailable' }
+
+  /ai/messages/{messageId}/feedback:
+    post:
+      tags: [AI Mentor]
+      operationId: rateAiMessage
+      summary: Rate an AI Mentor answer
+      parameters:
+        - name: messageId
+          in: path
+          required: true
+          schema: { $ref: '#/components/schemas/Uuid' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [rating]
+              properties:
+                rating:
+                  type: string
+                  enum: [HELPFUL, NOT_HELPFUL]
+      responses:
+        '204': { description: Saved }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ------------------------------------------------------------ Learning
+  /learning/recommendations:
+    get:
+      tags: [Learning]
+      operationId: getRecommendations
+      summary: Next lesson per path
+      description: First item of the path that is neither completed nor skipped (BR-026).
+      parameters:
+        - name: pathId
+          in: query
+          description: Limit to one path; omit for every path in progress
+          schema: { $ref: '#/components/schemas/Uuid' }
+      responses:
+        '200':
+          description: Recommendations
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/Recommendation' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /learning/mastery:
+    get:
+      tags: [Learning]
+      operationId: getMastery
+      summary: Mastery per concept
+      parameters:
+        - name: language
+          in: query
+          schema: { $ref: '#/components/schemas/Language' }
+      responses:
+        '200':
+          description: Mastery
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/ConceptMastery' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /learning/knowledge-gaps:
+    get:
+      tags: [Learning]
+      operationId: getKnowledgeGaps
+      summary: Knowledge gaps, lowest mastery first
+      parameters:
+        - name: language
+          in: query
+          schema: { $ref: '#/components/schemas/Language' }
+      responses:
+        '200':
+          description: Gaps (empty list when none)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/KnowledgeGap' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  # ----------------------------------------------------------- Dashboard
+  /dashboard/overview:
+    get:
+      tags: [Dashboard]
+      operationId: getDashboardOverview
+      summary: Dashboard content
+      description: BR-026, BR-028, BR-037; US24, US25, US27.
+      responses:
+        '200':
+          description: Overview
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DashboardOverview' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /dashboard/todo:
+    get:
+      tags: [Dashboard]
+      operationId: getDashboardTodo
+      summary: AI-added practice and quizzes not yet done
+      responses:
+        '200':
+          description: To-do items
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/TodoItem' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  # --------------------------------------------------------------- Admin
+  /admin/courses:
+    get:
+      tags: [Admin]
+      operationId: adminListCourses
+      summary: List courses
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - name: language
+          in: query
+          schema: { $ref: '#/components/schemas/Language' }
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/ContentStatus' }
+      responses:
+        '200':
+          description: Courses
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PageMeta'
+                  - type: object
+                    required: [items]
+                    properties:
+                      items:
+                        type: array
+                        items: { $ref: '#/components/schemas/AdminCourse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [Admin]
+      operationId: adminCreateCourse
+      summary: Create a course
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AdminCourseInput' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminCourse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /admin/courses/{courseId}:
+    patch:
+      tags: [Admin]
+      operationId: adminUpdateCourse
+      summary: Edit, publish or hide a course
+      description: Hiding sets `status = HIDDEN`; nothing is deleted (BR-008).
+      parameters:
+        - $ref: '#/components/parameters/CourseId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AdminCoursePatch' }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminCourse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /admin/courses/{courseId}/modules:
+    post:
+      tags: [Admin]
+      operationId: adminCreateModule
+      summary: Add a module (chapter) to a course
+      parameters:
+        - $ref: '#/components/parameters/CourseId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AdminModuleInput' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminModule' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /admin/modules/{moduleId}:
+    patch:
+      tags: [Admin]
+      operationId: adminUpdateModule
+      summary: Edit, reorder, publish or hide a module
+      parameters:
+        - $ref: '#/components/parameters/ModuleId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AdminModulePatch' }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminModule' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /admin/modules/{moduleId}/lessons:
+    post:
+      tags: [Admin]
+      operationId: adminCreateLesson
+      summary: Add a lesson to a module
+      description: How video files are uploaded is not designed yet; `videoObjectKey` refers to a file already in Object Storage.
+      parameters:
+        - $ref: '#/components/parameters/ModuleId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AdminLessonInput' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminLesson' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /admin/lessons/{lessonId}:
+    patch:
+      tags: [Admin]
+      operationId: adminUpdateLesson
+      summary: Edit, reorder, publish or hide a lesson
+      parameters:
+        - $ref: '#/components/parameters/LessonId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AdminLessonPatch' }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminLesson' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /admin/exercises:
+    post:
+      tags: [Admin]
+      operationId: adminCreateExercise
+      summary: Create a practice exercise or coding challenge for a lesson
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AdminExerciseInput' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminExercise' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /admin/exercises/{exerciseId}:
+    patch:
+      tags: [Admin]
+      operationId: adminUpdateExercise
+      summary: Edit, publish or hide an exercise
+      description: Publishing requires at least one test case and a reference solution that passes all of them (US29).
+      parameters:
+        - $ref: '#/components/parameters/ExerciseId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AdminExercisePatch' }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminExercise' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Cannot publish (`NO_TEST_CASES` or `REFERENCE_SOLUTION_FAILS`)
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /admin/exercises/{exerciseId}/test-cases:
+    get:
+      tags: [Admin]
+      operationId: adminListTestCases
+      summary: List test cases, including hidden ones
+      parameters:
+        - $ref: '#/components/parameters/ExerciseId'
+      responses:
+        '200':
+          description: Test cases
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/AdminTestCase' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      tags: [Admin]
+      operationId: adminCreateTestCase
+      summary: Add a test case
+      parameters:
+        - $ref: '#/components/parameters/ExerciseId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AdminTestCaseInput' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminTestCase' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /admin/test-cases/{testCaseId}:
+    patch:
+      tags: [Admin]
+      operationId: adminUpdateTestCase
+      summary: Edit a test case
+      parameters:
+        - name: testCaseId
+          in: path
+          required: true
+          schema: { $ref: '#/components/schemas/Uuid' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AdminTestCasePatch' }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminTestCase' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /admin/assessments:
+    post:
+      tags: [Admin]
+      operationId: adminCreateAssessment
+      summary: Create a quiz for a quiz lesson
+      description: Competency assessments are generated by the LLM and are not created here (BR-034).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AdminAssessmentInput' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminAssessment' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /admin/assessments/{assessmentId}:
+    patch:
+      tags: [Admin]
+      operationId: adminUpdateAssessment
+      summary: Edit, publish or hide a quiz
+      parameters:
+        - name: assessmentId
+          in: path
+          required: true
+          schema: { $ref: '#/components/schemas/Uuid' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AdminAssessmentPatch' }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminAssessment' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /admin/assessments/{assessmentId}/questions:
+    post:
+      tags: [Admin]
+      operationId: adminCreateQuestion
+      summary: Add a question to a quiz
+      parameters:
+        - name: assessmentId
+          in: path
+          required: true
+          schema: { $ref: '#/components/schemas/Uuid' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AdminQuestionInput' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminQuestion' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /admin/assessment-questions/{questionId}:
+    patch:
+      tags: [Admin]
+      operationId: adminUpdateQuestion
+      summary: Edit a question
+      parameters:
+        - name: questionId
+          in: path
+          required: true
+          schema: { $ref: '#/components/schemas/Uuid' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AdminQuestionPatch' }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminQuestion' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /admin/users:
+    get:
+      tags: [Admin]
+      operationId: adminListUsers
+      summary: List and search users
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - name: q
+          in: query
+          description: Search by email or display name
+          schema: { type: string }
+        - name: role
+          in: query
+          schema: { $ref: '#/components/schemas/Role' }
+        - name: isActive
+          in: query
+          schema: { type: boolean }
+      responses:
+        '200':
+          description: Users
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PageMeta'
+                  - type: object
+                    required: [items]
+                    properties:
+                      items:
+                        type: array
+                        items: { $ref: '#/components/schemas/AdminUser' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /admin/users/{userId}:
+    patch:
+      tags: [Admin]
+      operationId: adminUpdateUser
+      summary: Lock/unlock an account or change its role
+      description: An admin cannot demote or lock themselves; at least one active admin remains (BR-006).
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema: { $ref: '#/components/schemas/Uuid' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              minProperties: 1
+              properties:
+                role: { $ref: '#/components/schemas/Role' }
+                isActive: { type: boolean }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminUser' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Self-demotion, self-lock or last admin (`LAST_ADMIN`, `SELF_CHANGE`)
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  /admin/stats:
+    get:
+      tags: [Admin]
+      operationId: adminGetStats
+      summary: Aggregated usage and AI cost per day
+      description: Aggregates only; no source code or conversations (BR-030).
+      parameters:
+        - name: from
+          in: query
+          required: true
+          schema: { type: string, format: date }
+        - name: to
+          in: query
+          required: true
+          schema: { type: string, format: date }
+      responses:
+        '200':
+          description: Statistics
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminStats' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /admin/monitoring:
+    get:
+      tags: [Admin]
+      operationId: adminGetMonitoring
+      summary: Error rates and service health
+      responses:
+        '200':
+          description: Monitoring
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminMonitoring' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Access token from login or refresh; expires after 15 minutes (NFR-SEC-001).
+
+  parameters:
+    ProfileId:
+      name: profileId
+      in: path
+      required: true
+      schema: { $ref: '#/components/schemas/Uuid' }
+    PathId:
+      name: pathId
+      in: path
+      required: true
+      schema: { $ref: '#/components/schemas/Uuid' }
+    LessonId:
+      name: lessonId
+      in: path
+      required: true
+      schema: { $ref: '#/components/schemas/Uuid' }
+    ExerciseId:
+      name: exerciseId
+      in: path
+      required: true
+      schema: { $ref: '#/components/schemas/Uuid' }
+    SubmissionId:
+      name: submissionId
+      in: path
+      required: true
+      schema: { $ref: '#/components/schemas/Uuid' }
+    AttemptId:
+      name: attemptId
+      in: path
+      required: true
+      schema: { $ref: '#/components/schemas/Uuid' }
+    CourseId:
+      name: courseId
+      in: path
+      required: true
+      schema: { $ref: '#/components/schemas/Uuid' }
+    ModuleId:
+      name: moduleId
+      in: path
+      required: true
+      schema: { $ref: '#/components/schemas/Uuid' }
+    Page:
+      name: page
+      in: query
+      schema: { type: integer, minimum: 1, default: 1 }
+    PageSize:
+      name: pageSize
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+
+  responses:
+    ValidationError:
+      description: Invalid input; `errors` lists each field (`VALIDATION_FAILED`)
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    Unauthorized:
+      description: No valid session (`UNAUTHENTICATED`, BR-005)
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    Forbidden:
+      description: Wrong role (`FORBIDDEN`) or onboarding not finished (`ONBOARDING_REQUIRED`, BR-032)
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    NotFound:
+      description: Not found, not owned by the caller, or not published (`NOT_FOUND`, BR-005)
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    AttemptSubmitted:
+      description: The attempt is already submitted (`ATTEMPT_SUBMITTED`, BR-016)
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    AiLocked:
+      description: AI Mentor help is locked until the challenge is `ACCEPTED` (`CHALLENGE_NOT_SOLVED`, BR-017), or Review needs a submission first (`SUBMISSION_REQUIRED`)
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    PayloadTooLarge:
+      description: Source code over 64 KB or body over 1 MB (`PAYLOAD_TOO_LARGE`)
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    TooManyRequests:
+      description: Rate limit or daily AI quota exceeded (`RATE_LIMITED`, `AI_QUOTA_EXCEEDED`); `Retry-After` header and `resetAt` field tell when to retry
+      headers:
+        Retry-After:
+          schema: { type: integer }
+          description: Seconds to wait
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    AiUnavailable:
+      description: LLM error or timeout (`AI_UNAVAILABLE`); not charged to the quota, the client may retry (BR-021)
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+
+  schemas:
+    # ------------------------------------------------------------ Common
+    Uuid:
+      type: string
+      format: uuid
+    Problem:
+      type: object
+      description: RFC 7807 problem details with a stable application `code`.
+      required: [type, title, status, code]
+      properties:
+        type: { type: string, format: uri, example: 'https://devmentor.example/problems/validation-failed' }
+        title: { type: string, example: Dữ liệu không hợp lệ }
+        status: { type: integer, example: 422 }
+        code: { type: string, example: VALIDATION_FAILED }
+        detail: { type: string }
+        errors:
+          type: array
+          items:
+            type: object
+            required: [field, message]
+            properties:
+              field: { type: string, example: email }
+              message: { type: string, example: Email đã được sử dụng }
+        resetAt:
+          type: string
+          format: date-time
+          description: For `AI_QUOTA_EXCEEDED`, when the quota resets
+        correlationId: { type: string }
+    PageMeta:
+      type: object
+      required: [page, pageSize, total]
+      properties:
+        page: { type: integer }
+        pageSize: { type: integer }
+        total: { type: integer }
+    Language:
+      type: string
+      enum: [C, CPP, PYTHON, JAVA, JAVASCRIPT, SQL]
+    Role:
+      type: string
+      enum: [LEARNER, ADMIN]
+    ContentStatus:
+      type: string
+      enum: [DRAFT, PUBLISHED, HIDDEN]
+    LessonType:
+      type: string
+      enum: [VIDEO, READING, PRACTICE, QUIZ, CHALLENGE]
+    PathStatus:
+      type: string
+      enum: [IN_PROGRESS, COMPLETED]
+    PathItemStatus:
+      type: string
+      enum: [NOT_STARTED, IN_PROGRESS, COMPLETED, SKIPPED]
+    TopicHandling:
+      type: string
+      enum: [LEARN, REVIEW, SKIP]
+      description: Learn from scratch, Review, Skip (BR-025)
+    SelfRating:
+      type: string
+      enum: [NOT_LEARNED, UNSURE, CONFIDENT]
+    Verdict:
+      type: string
+      enum: [ACCEPTED, WRONG_ANSWER, RUNTIME_ERROR, TIME_LIMIT_EXCEEDED, MEMORY_LIMIT_EXCEEDED, COMPILE_ERROR, SYSTEM_ERROR]
+    Progress:
+      type: object
+      required: [completed, total, percent]
+      description: Skipped items are not counted (BR-022).
+      properties:
+        completed: { type: integer, example: 3 }
+        total: { type: integer, example: 22 }
+        percent: { type: integer, minimum: 0, maximum: 100, example: 14 }
+    LessonRef:
+      type: object
+      required: [lessonId, pathId, title, type]
+      properties:
+        lessonId: { $ref: '#/components/schemas/Uuid' }
+        pathId: { $ref: '#/components/schemas/Uuid' }
+        title: { type: string, example: Số học con trỏ }
+        type: { $ref: '#/components/schemas/LessonType' }
+        chapterTitle: { type: string, example: Con trỏ }
+        position: { type: integer, example: 4 }
+
+    # -------------------------------------------------------------- Auth
+    RegisterRequest:
+      type: object
+      required: [displayName, email, password, acceptTerms]
+      properties:
+        displayName: { type: string, minLength: 1, maxLength: 100, example: Hiếu }
+        email: { type: string, format: email }
+        password:
+          type: string
+          format: password
+          minLength: 8
+          description: At least 8 characters with letters and digits (NFR-SEC-002)
+        acceptTerms:
+          type: boolean
+          enum: [true]
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string, format: password }
+    RefreshRequest:
+      type: object
+      required: [refreshToken]
+      properties:
+        refreshToken: { type: string }
+    AuthSession:
+      type: object
+      required: [accessToken, refreshToken, expiresIn, user]
+      properties:
+        accessToken: { type: string }
+        refreshToken: { type: string }
+        expiresIn: { type: integer, description: Access token lifetime in seconds, example: 900 }
+        user: { $ref: '#/components/schemas/CurrentUser' }
+    CurrentUser:
+      type: object
+      required: [id, email, displayName, role]
+      properties:
+        id: { $ref: '#/components/schemas/Uuid' }
+        email: { type: string, format: email }
+        displayName: { type: string }
+        role: { $ref: '#/components/schemas/Role' }
+        onboarding: { $ref: '#/components/schemas/OnboardingStatus' }
+
+    # -------------------------------------------------------- Onboarding
+    OnboardingStatus:
+      type: object
+      required: [completed, step]
+      properties:
+        completed:
+          type: boolean
+          description: true once at least one competency profile is confirmed
+        step:
+          type: string
+          enum: [SURVEY, ASSESSMENT, PROFILE, NONE]
+          description: The step to resume; `NONE` when no onboarding is in progress
+        language: { $ref: '#/components/schemas/Language' }
+        surveyId: { $ref: '#/components/schemas/Uuid' }
+        attemptId: { $ref: '#/components/schemas/Uuid' }
+        profileId: { $ref: '#/components/schemas/Uuid' }
+    Topic:
+      type: object
+      required: [conceptId, name]
+      properties:
+        conceptId: { $ref: '#/components/schemas/Uuid' }
+        name: { type: string, example: Con trỏ }
+    SurveyRequest:
+      type: object
+      required: [language, goals, experienceLevel, selfAssessment]
+      properties:
+        language: { $ref: '#/components/schemas/Language' }
+        otherLanguage:
+          type: string
+          description: Free text when the learner picked "Other"; handling is an open question (BR-031)
+        goals:
+          type: array
+          minItems: 1
+          items:
+            type: string
+            enum: [SCHOOL_COURSES, DSA, INTERVIEWS, PERSONAL_PROJECTS, EMBEDDED_SYSTEMS, HOBBY, OTHER]
+        otherGoal: { type: string }
+        experienceLevel:
+          type: string
+          enum: [NEVER_PROGRAMMED, LEVEL_2, BASICS, LEVEL_4, REGULAR_USE]
+          description: |
+            5 levels from "Never programmed" to "Use it regularly". Only the
+            first, "Know the basics" and the last label are known from the
+            prototype; middle codes are placeholders.
+        selfAssessment:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            required: [conceptId, rating]
+            properties:
+              conceptId: { $ref: '#/components/schemas/Uuid' }
+              rating: { $ref: '#/components/schemas/SelfRating' }
+    Survey:
+      allOf:
+        - $ref: '#/components/schemas/SurveyRequest'
+        - type: object
+          required: [id, questionCount, estimatedMinutes, createdAt]
+          properties:
+            id: { $ref: '#/components/schemas/Uuid' }
+            questionCount: { type: integer, example: 12 }
+            estimatedMinutes: { type: integer, example: 10 }
+            createdAt: { type: string, format: date-time }
+    CompetencyProfile:
+      type: object
+      required: [id, language, status, overallLevel, score, correctCount, questionCount, handlingCounts, topics, canRetake]
+      properties:
+        id: { $ref: '#/components/schemas/Uuid' }
+        language: { $ref: '#/components/schemas/Language' }
+        status:
+          type: string
+          enum: [DRAFT, CONFIRMED]
+        overallLevel: { type: string, example: Cơ bản }
+        score: { type: integer, minimum: 0, maximum: 100, example: 67 }
+        correctCount: { type: integer, example: 8 }
+        questionCount: { type: integer, example: 12 }
+        aiComment:
+          type: string
+          nullable: true
+          description: LLM comment comparing results with the self-assessment; null if generation failed
+        handlingCounts:
+          type: object
+          required: [learn, review, skip]
+          properties:
+            learn: { type: integer }
+            review: { type: integer }
+            skip: { type: integer }
+        topics:
+          type: array
+          items: { $ref: '#/components/schemas/ProfileTopic' }
+        canRetake:
+          type: boolean
+          description: false after confirmation (BR-016)
+        confirmedAt: { type: string, format: date-time, nullable: true }
+    ProfileTopic:
+      type: object
+      required: [conceptId, name, source, selfRating, suggestedHandling, chosenHandling]
+      properties:
+        conceptId: { $ref: '#/components/schemas/Uuid' }
+        name: { type: string, example: Con trỏ }
+        source:
+          type: string
+          enum: [ASSESSED, SURVEY]
+          description: SURVEY = "Not tested, from survey"
+        score: { type: integer, nullable: true, minimum: 0, maximum: 100, example: 33 }
+        correct: { type: integer, nullable: true, example: 1 }
+        total: { type: integer, nullable: true, example: 3 }
+        selfRating: { $ref: '#/components/schemas/SelfRating' }
+        suggestedHandling: { $ref: '#/components/schemas/TopicHandling' }
+        chosenHandling: { $ref: '#/components/schemas/TopicHandling' }
+
+    # ------------------------------------------------------------- Paths
+    LearningPathSummary:
+      type: object
+      required: [id, language, courseTitle, level, status, createdAt, progress, skippedCount, aiAddedCount]
+      properties:
+        id: { $ref: '#/components/schemas/Uuid' }
+        language: { $ref: '#/components/schemas/Language' }
+        courseTitle: { type: string, example: Lập trình C chuyên sâu }
+        level: { type: string, example: Trung cấp }
+        status: { $ref: '#/components/schemas/PathStatus' }
+        createdAt: { type: string, format: date-time }
+        progress: { $ref: '#/components/schemas/Progress' }
+        skippedCount: { type: integer, example: 3 }
+        aiAddedCount: { type: integer, example: 1 }
+        nextLesson:
+          type: object
+          allOf:
+            - $ref: '#/components/schemas/LessonRef'
+          nullable: true
+    LearningPathDetail:
+      allOf:
+        - $ref: '#/components/schemas/LearningPathSummary'
+        - type: object
+          required: [course, chapters]
+          properties:
+            course:
+              type: object
+              required: [id, title, chapterCount, lessonCount]
+              properties:
+                id: { $ref: '#/components/schemas/Uuid' }
+                title: { type: string }
+                chapterCount: { type: integer, example: 6 }
+                lessonCount: { type: integer, example: 22 }
+                estimatedWeeks: { type: integer, example: 6 }
+            chapters:
+              type: array
+              items:
+                type: object
+                required: [id, title, position, items]
+                properties:
+                  id: { $ref: '#/components/schemas/Uuid' }
+                  title: { type: string, example: Con trỏ }
+                  position: { type: integer }
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/PathItem' }
+    PathItem:
+      type: object
+      required: [id, lessonId, title, type, position, status, isQuickReview, isAiAdded]
+      properties:
+        id: { $ref: '#/components/schemas/Uuid' }
+        lessonId: { $ref: '#/components/schemas/Uuid' }
+        title: { type: string }
+        type: { $ref: '#/components/schemas/LessonType' }
+        durationMinutes: { type: integer, nullable: true }
+        position: { type: integer }
+        status: { $ref: '#/components/schemas/PathItemStatus' }
+        isQuickReview: { type: boolean }
+        isAiAdded: { type: boolean }
+        reason:
+          type: string
+          nullable: true
+          description: Written by the LLM; the order itself comes from rules (BR-025)
+
+    # ----------------------------------------------------------- Lessons
+    Lesson:
+      type: object
+      required: [id, type, title, chapter, progressStatus, isAiAdded]
+      properties:
+        id: { $ref: '#/components/schemas/Uuid' }
+        pathId: { $ref: '#/components/schemas/Uuid' }
+        chapter:
+          type: object
+          required: [id, title]
+          properties:
+            id: { $ref: '#/components/schemas/Uuid' }
+            title: { type: string }
+        type: { $ref: '#/components/schemas/LessonType' }
+        title: { type: string }
+        durationMinutes: { type: integer, nullable: true }
+        progressStatus: { $ref: '#/components/schemas/PathItemStatus' }
+        isAiAdded: { type: boolean }
+        content:
+          type: string
+          nullable: true
+          description: Markdown for `READING` lessons
+        video:
+          type: object
+          nullable: true
+          description: For `VIDEO` lessons
+          required: [url, expiresAt, durationSeconds, resumeAtSecond, checkpoints]
+          properties:
+            url: { type: string, format: uri, description: Signed Object Storage URL }
+            expiresAt: { type: string, format: date-time }
+            durationSeconds: { type: integer, example: 720 }
+            resumeAtSecond: { type: integer, example: 312 }
+            checkpoints:
+              type: array
+              items: { $ref: '#/components/schemas/Checkpoint' }
+        summary: { type: string, nullable: true }
+        transcript:
+          type: array
+          nullable: true
+          items:
+            type: object
+            required: [startSecond, text]
+            properties:
+              startSecond: { type: integer }
+              text: { type: string }
+        exerciseId:
+          type: string
+          format: uuid
+          nullable: true
+          description: For `PRACTICE` and `CHALLENGE` lessons
+        quizId:
+          type: string
+          format: uuid
+          nullable: true
+          description: For `QUIZ` lessons
+    Checkpoint:
+      type: object
+      description: In-video question; the correct answer is not included (BR-036)
+      required: [id, atSecond, prompt, options]
+      properties:
+        id: { $ref: '#/components/schemas/Uuid' }
+        atSecond: { type: integer, example: 312 }
+        prompt: { type: string }
+        options:
+          type: array
+          items: { $ref: '#/components/schemas/Option' }
+    Option:
+      type: object
+      required: [key, text]
+      properties:
+        key: { type: string, example: A }
+        text: { type: string }
+    LessonProgress:
+      type: object
+      required: [lessonId, status, pathProgress]
+      properties:
+        lessonId: { $ref: '#/components/schemas/Uuid' }
+        status: { $ref: '#/components/schemas/PathItemStatus' }
+        completedAt: { type: string, format: date-time, nullable: true }
+        pathProgress: { $ref: '#/components/schemas/Progress' }
+    LessonNotes:
+      type: object
+      required: [lessonId, content]
+      properties:
+        lessonId: { $ref: '#/components/schemas/Uuid' }
+        content: { type: string }
+        updatedAt: { type: string, format: date-time, nullable: true }
+
+    # --------------------------------------------------------- Exercises
+    Exercise:
+      type: object
+      required: [id, lessonId, type, title, statement, language, source, starterCode, editableFile, files, sampleTests, hiddenTestCount, accepted, aiMentorAvailable]
+      properties:
+        id: { $ref: '#/components/schemas/Uuid' }
+        lessonId: { $ref: '#/components/schemas/Uuid' }
+        type:
+          type: string
+          enum: [PRACTICE, CHALLENGE]
+        title: { type: string }
+        statement: { type: string, description: Markdown }
+        requirements:
+          type: array
+          items: { type: string }
+          description: Shown as a checklist
+        examples:
+          type: array
+          items:
+            type: object
+            properties:
+              input: { type: string }
+              output: { type: string }
+              explanation: { type: string }
+        language: { $ref: '#/components/schemas/Language' }
+        difficulty:
+          type: string
+          enum: [EASY, MEDIUM, HARD]
+        source:
+          type: string
+          enum: [TEAM, AI]
+          description: AI = "AI added" practice (BR-035)
+        starterCode: { type: string }
+        editableFile: { type: string, example: pointer.c }
+        files:
+          type: array
+          description: Read-only supporting files (BR-012)
+          items:
+            type: object
+            required: [path, content]
+            properties:
+              path: { type: string, example: main.c }
+              content: { type: string }
+        sampleTests:
+          type: array
+          items:
+            type: object
+            required: [id, input, expectedOutput]
+            properties:
+              id: { $ref: '#/components/schemas/Uuid' }
+              input: { type: string }
+              expectedOutput: { type: string }
+        hiddenTestCount: { type: integer }
+        accepted: { type: boolean }
+        bestScore: { type: integer, nullable: true }
+        aiMentorAvailable:
+          type: boolean
+          description: false for a challenge until it is `ACCEPTED` (BR-017)
+    ExecutionRequest:
+      type: object
+      required: [exerciseId, sourceCode, mode]
+      properties:
+        exerciseId: { $ref: '#/components/schemas/Uuid' }
+        sourceCode: { type: string, maxLength: 65536 }
+        mode:
+          type: string
+          enum: [CUSTOM_INPUT, SAMPLE_TESTS]
+        input:
+          type: string
+          description: Required when `mode = CUSTOM_INPUT`
+    Execution:
+      type: object
+      required: [id, exerciseId, status, createdAt]
+      properties:
+        id: { $ref: '#/components/schemas/Uuid' }
+        exerciseId: { $ref: '#/components/schemas/Uuid' }
+        status:
+          type: string
+          enum: [QUEUED, RUNNING, OK, COMPILE_ERROR, RUNTIME_ERROR, TIME_LIMIT_EXCEEDED, MEMORY_LIMIT_EXCEEDED, SYSTEM_ERROR]
+        stdout: { type: string, nullable: true }
+        stderr: { type: string, nullable: true }
+        durationMs: { type: integer, nullable: true }
+        sampleResults:
+          type: array
+          description: Present when `mode = SAMPLE_TESTS`
+          items: { $ref: '#/components/schemas/SampleTestResult' }
+        createdAt: { type: string, format: date-time }
+    SampleTestResult:
+      type: object
+      required: [testId, passed]
+      properties:
+        testId: { $ref: '#/components/schemas/Uuid' }
+        passed: { type: boolean }
+        input: { type: string }
+        expectedOutput: { type: string }
+        actualOutput: { type: string }
+        runtimeMs: { type: integer }
+        memoryKb: { type: integer }
+    SubmissionRequest:
+      type: object
+      required: [exerciseId, sourceCode]
+      properties:
+        exerciseId: { $ref: '#/components/schemas/Uuid' }
+        sourceCode: { type: string, maxLength: 65536 }
+    SubmissionSummary:
+      type: object
+      required: [id, exerciseId, status, submittedAt]
+      properties:
+        id: { $ref: '#/components/schemas/Uuid' }
+        exerciseId: { $ref: '#/components/schemas/Uuid' }
+        status:
+          type: string
+          enum: [PENDING, GRADED]
+        verdict:
+          type: string
+          allOf:
+            - $ref: '#/components/schemas/Verdict'
+          nullable: true
+        score: { type: integer, nullable: true, minimum: 0, maximum: 100 }
+        passedTests: { type: integer, nullable: true }
+        totalTests: { type: integer, nullable: true }
+        submittedAt: { type: string, format: date-time }
+    Submission:
+      allOf:
+        - $ref: '#/components/schemas/SubmissionSummary'
+        - type: object
+          properties:
+            sourceCode: { type: string }
+            maxRuntimeMs: { type: integer, nullable: true }
+            maxMemoryKb: { type: integer, nullable: true }
+            compileOutput: { type: string, nullable: true }
+            sampleTests:
+              type: array
+              items: { $ref: '#/components/schemas/SampleTestResult' }
+            hiddenTests:
+              type: object
+              description: Counts only; hidden content is never returned (BR-014)
+              properties:
+                passed: { type: integer }
+                failed: { type: integer }
+            pathProgress:
+              type: object
+              allOf:
+                - $ref: '#/components/schemas/Progress'
+              nullable: true
+
+    # ------------------------------------------------------- Assessments
+    Question:
+      type: object
+      required: [id, position, conceptId, conceptName, prompt, options, multipleAnswers]
+      properties:
+        id: { $ref: '#/components/schemas/Uuid' }
+        position: { type: integer }
+        conceptId: { $ref: '#/components/schemas/Uuid' }
+        conceptName: { type: string, example: Con trỏ }
+        prompt: { type: string }
+        code:
+          type: string
+          nullable: true
+          description: Code block shown with the question
+        options:
+          type: array
+          items: { $ref: '#/components/schemas/Option' }
+        multipleAnswers:
+          type: boolean
+          description: true for "select all correct answers" (quizzes only)
+    Answer:
+      type: object
+      required: [questionId]
+      properties:
+        questionId: { $ref: '#/components/schemas/Uuid' }
+        selected:
+          type: array
+          items: { type: string }
+          example: [B]
+        dontKnow:
+          type: boolean
+          default: false
+          description: '"I don''t know" (competency assessment only); scores 0'
+    AssessmentAttempt:
+      type: object
+      required: [id, assessmentId, type, status, questions, answers, startedAt]
+      properties:
+        id: { $ref: '#/components/schemas/Uuid' }
+        assessmentId: { $ref: '#/components/schemas/Uuid' }
+        type:
+          type: string
+          enum: [COMPETENCY, QUIZ]
+        title: { type: string, example: 'Quiz: con trỏ' }
+        status:
+          type: string
+          enum: [IN_PROGRESS, SUBMITTED]
+        questions:
+          type: array
+          items: { $ref: '#/components/schemas/Question' }
+        answers:
+          type: array
+          items: { $ref: '#/components/schemas/Answer' }
+        startedAt: { type: string, format: date-time }
+        submittedAt: { type: string, format: date-time, nullable: true }
+    AttemptResult:
+      type: object
+      required: [attemptId, type, score, correctCount, questionCount, skills]
+      properties:
+        attemptId: { $ref: '#/components/schemas/Uuid' }
+        type:
+          type: string
+          enum: [COMPETENCY, QUIZ]
+        score: { type: integer, minimum: 0, maximum: 100 }
+        correctCount: { type: integer }
+        questionCount: { type: integer }
+        passed:
+          type: boolean
+          nullable: true
+          description: Quiz only; null for the competency assessment (no pass/fail)
+        skills:
+          type: array
+          items:
+            type: object
+            required: [conceptId, name, correct, total]
+            properties:
+              conceptId: { $ref: '#/components/schemas/Uuid' }
+              name: { type: string }
+              correct: { type: integer }
+              total: { type: integer }
+        review:
+          type: array
+          description: Quiz only; correct answers and AI Mentor explanations
+          items:
+            type: object
+            required: [questionId, correct, correctAnswers]
+            properties:
+              questionId: { $ref: '#/components/schemas/Uuid' }
+              selected:
+                type: array
+                items: { type: string }
+              correctAnswers:
+                type: array
+                items: { type: string }
+              correct: { type: boolean }
+              explanation: { type: string, nullable: true }
+        profileId:
+          type: string
+          format: uuid
+          nullable: true
+          description: Competency assessment only
+        pathUpdate:
+          type: object
+          nullable: true
+          description: Quiz only (BR-035)
+          required: [status]
+          properties:
+            status:
+              type: string
+              enum: [NONE, PENDING, APPLIED]
+            pathId: { $ref: '#/components/schemas/Uuid' }
+            addedItems:
+              type: array
+              items: { $ref: '#/components/schemas/PathItem' }
+
+    # --------------------------------------------------------- AI Mentor
+    ExplainRequest:
+      type: object
+      required: [lessonId]
+      properties:
+        lessonId: { $ref: '#/components/schemas/Uuid' }
+        exerciseId: { $ref: '#/components/schemas/Uuid' }
+        conversationId: { $ref: '#/components/schemas/Uuid' }
+        selection: { type: string, maxLength: 4000, description: Selected passage }
+        conceptId: { $ref: '#/components/schemas/Uuid' }
+        quickAction:
+          type: string
+          enum: [SIMPLER, ANOTHER_EXAMPLE]
+        videoPositionSeconds: { type: integer, minimum: 0 }
+    AskRequest:
+      type: object
+      required: [question]
+      description: One of `lessonId` or `exerciseId` is required.
+      properties:
+        lessonId: { $ref: '#/components/schemas/Uuid' }
+        exerciseId: { $ref: '#/components/schemas/Uuid' }
+        conversationId: { $ref: '#/components/schemas/Uuid' }
+        question: { type: string, minLength: 1, maxLength: 4000 }
+        videoPositionSeconds: { type: integer, minimum: 0 }
+        currentCode: { type: string, maxLength: 65536 }
+    HintRequest:
+      type: object
+      required: [exerciseId, currentCode]
+      properties:
+        exerciseId: { $ref: '#/components/schemas/Uuid' }
+        conversationId: { $ref: '#/components/schemas/Uuid' }
+        currentCode: { type: string, maxLength: 65536 }
+    DebugRequest:
+      type: object
+      required: [exerciseId, currentCode]
+      description: One of `executionId` or `submissionId` is required.
+      properties:
+        exerciseId: { $ref: '#/components/schemas/Uuid' }
+        conversationId: { $ref: '#/components/schemas/Uuid' }
+        currentCode: { type: string, maxLength: 65536 }
+        executionId: { $ref: '#/components/schemas/Uuid' }
+        submissionId: { $ref: '#/components/schemas/Uuid' }
+        testId:
+          allOf:
+            - $ref: '#/components/schemas/Uuid'
+          description: A failing sample test to focus on
+    AiMessage:
+      type: object
+      required: [id, conversationId, mode, content, createdAt]
+      properties:
+        id: { $ref: '#/components/schemas/Uuid' }
+        conversationId: { $ref: '#/components/schemas/Uuid' }
+        mode:
+          type: string
+          enum: [EXPLAIN, ASK, HINT, DEBUG, REVIEW]
+        content: { type: string, description: 'Markdown, in Vietnamese by default' }
+        sources:
+          type: array
+          items:
+            type: object
+            required: [lessonId]
+            properties:
+              lessonId: { $ref: '#/components/schemas/Uuid' }
+              section: { type: string }
+              videoSecond: { type: integer, nullable: true }
+        lineRefs:
+          type: array
+          items: { type: integer }
+          example: [12]
+        hintLevel: { type: integer, nullable: true, minimum: 1, maximum: 3 }
+        maxHintLevel: { type: integer, nullable: true, example: 3 }
+        suggestedActions:
+          type: array
+          items:
+            type: string
+            enum: [SIMPLER, ANOTHER_EXAMPLE, NEXT_HINT, GO_TO_LINE, EXPLAIN_FAILING_TEST, REVIEW_CODE]
+        createdAt: { type: string, format: date-time }
+
+    # ---------------------------------------------------------- Learning
+    Recommendation:
+      type: object
+      required: [pathId, lesson]
+      properties:
+        pathId: { $ref: '#/components/schemas/Uuid' }
+        lesson: { $ref: '#/components/schemas/LessonRef' }
+        reason: { type: string, nullable: true }
+        resumeAtSecond: { type: integer, nullable: true }
+    ConceptMastery:
+      type: object
+      required: [conceptId, name, language, source, evidenceCount]
+      properties:
+        conceptId: { $ref: '#/components/schemas/Uuid' }
+        name: { type: string }
+        language: { $ref: '#/components/schemas/Language' }
+        score:
+          type: integer
+          nullable: true
+          minimum: 0
+          maximum: 100
+          description: mastery_score × 100; null when not tested
+        evidenceCount: { type: integer }
+        source:
+          type: string
+          enum: [MEASURED, SURVEY]
+        selfRating:
+          type: string
+          allOf:
+            - $ref: '#/components/schemas/SelfRating'
+          nullable: true
+    KnowledgeGap:
+      type: object
+      required: [conceptId, name, score, evidenceCount]
+      properties:
+        conceptId: { $ref: '#/components/schemas/Uuid' }
+        name: { type: string }
+        score: { type: integer, minimum: 0, maximum: 100 }
+        evidenceCount: { type: integer }
+        aiPracticeLessonIds:
+          type: array
+          items: { $ref: '#/components/schemas/Uuid' }
+
+    # --------------------------------------------------------- Dashboard
+    DashboardOverview:
+      type: object
+      required: [displayName, streak, lessonsCompleted, quizAverage, paths, competency]
+      properties:
+        displayName: { type: string }
+        continueLearning:
+          type: object
+          nullable: true
+          required: [lesson]
+          properties:
+            lesson: { $ref: '#/components/schemas/LessonRef' }
+            minutesLeft: { type: integer, nullable: true, example: 7 }
+            resumeAtSecond: { type: integer, nullable: true }
+        streak:
+          type: object
+          required: [current, last7Days]
+          properties:
+            current: { type: integer, example: 6 }
+            last7Days:
+              type: array
+              minItems: 7
+              maxItems: 7
+              items:
+                type: object
+                required: [date, active]
+                properties:
+                  date: { type: string, format: date }
+                  active: { type: boolean }
+        lessonsCompleted:
+          type: object
+          required: [total, thisWeek]
+          properties:
+            total: { type: integer, example: 12 }
+            thisWeek: { type: integer, example: 4 }
+        quizAverage:
+          type: object
+          required: [quizCount]
+          properties:
+            score: { type: integer, nullable: true, example: 78 }
+            quizCount: { type: integer, example: 5 }
+        paths:
+          type: array
+          description: Paths in progress
+          items: { $ref: '#/components/schemas/LearningPathSummary' }
+        competency:
+          type: array
+          description: One tab per language
+          items:
+            type: object
+            required: [language, skills]
+            properties:
+              language: { $ref: '#/components/schemas/Language' }
+              skills:
+                type: array
+                items:
+                  type: object
+                  required: [conceptId, name]
+                  properties:
+                    conceptId: { $ref: '#/components/schemas/Uuid' }
+                    name: { type: string }
+                    score: { type: integer, nullable: true }
+    TodoItem:
+      type: object
+      required: [type, lessonId, pathId, title]
+      properties:
+        type:
+          type: string
+          enum: [AI_PRACTICE, QUIZ]
+        lessonId: { $ref: '#/components/schemas/Uuid' }
+        pathId: { $ref: '#/components/schemas/Uuid' }
+        title: { type: string }
+        durationMinutes: { type: integer, nullable: true }
+        reason: { type: string, nullable: true }
+
+    # ------------------------------------------------------------- Admin
+    AdminCourseInput:
+      type: object
+      required: [title, language, difficulty]
+      properties:
+        title: { type: string }
+        description: { type: string }
+        language: { $ref: '#/components/schemas/Language' }
+        difficulty: { type: string, example: Trung cấp }
+    AdminCoursePatch:
+      type: object
+      minProperties: 1
+      properties:
+        title: { type: string }
+        description: { type: string }
+        difficulty: { type: string }
+        status: { $ref: '#/components/schemas/ContentStatus' }
+    AdminCourse:
+      allOf:
+        - $ref: '#/components/schemas/AdminCourseInput'
+        - type: object
+          required: [id, status, createdAt]
+          properties:
+            id: { $ref: '#/components/schemas/Uuid' }
+            status: { $ref: '#/components/schemas/ContentStatus' }
+            createdAt: { type: string, format: date-time }
+    AdminModuleInput:
+      type: object
+      required: [title, position]
+      properties:
+        title: { type: string }
+        position: { type: integer, minimum: 1 }
+    AdminModulePatch:
+      type: object
+      minProperties: 1
+      properties:
+        title: { type: string }
+        position: { type: integer, minimum: 1 }
+        status: { $ref: '#/components/schemas/ContentStatus' }
+    AdminModule:
+      allOf:
+        - $ref: '#/components/schemas/AdminModuleInput'
+        - type: object
+          required: [id, courseId, status]
+          properties:
+            id: { $ref: '#/components/schemas/Uuid' }
+            courseId: { $ref: '#/components/schemas/Uuid' }
+            status: { $ref: '#/components/schemas/ContentStatus' }
+    AdminLessonInput:
+      type: object
+      required: [type, title, position]
+      properties:
+        type: { $ref: '#/components/schemas/LessonType' }
+        title: { type: string }
+        position: { type: integer, minimum: 1 }
+        content: { type: string, description: Markdown for reading lessons }
+        videoObjectKey: { type: string }
+        durationSeconds: { type: integer }
+        summary: { type: string }
+        transcript: { type: string }
+        conceptIds:
+          type: array
+          items: { $ref: '#/components/schemas/Uuid' }
+        checkpoints:
+          type: array
+          items:
+            type: object
+            required: [atSecond, prompt, options, correctAnswer]
+            properties:
+              atSecond: { type: integer }
+              prompt: { type: string }
+              options:
+                type: array
+                items: { $ref: '#/components/schemas/Option' }
+              correctAnswer: { type: string }
+    AdminLessonPatch:
+      type: object
+      minProperties: 1
+      properties:
+        title: { type: string }
+        position: { type: integer, minimum: 1 }
+        content: { type: string }
+        videoObjectKey: { type: string }
+        durationSeconds: { type: integer }
+        summary: { type: string }
+        transcript: { type: string }
+        conceptIds:
+          type: array
+          items: { $ref: '#/components/schemas/Uuid' }
+        status: { $ref: '#/components/schemas/ContentStatus' }
+    AdminLesson:
+      allOf:
+        - $ref: '#/components/schemas/AdminLessonInput'
+        - type: object
+          required: [id, moduleId, status]
+          properties:
+            id: { $ref: '#/components/schemas/Uuid' }
+            moduleId: { $ref: '#/components/schemas/Uuid' }
+            status: { $ref: '#/components/schemas/ContentStatus' }
+    AdminExerciseInput:
+      type: object
+      required: [lessonId, type, title, description, language, starterCode, referenceSolution]
+      properties:
+        lessonId: { $ref: '#/components/schemas/Uuid' }
+        type:
+          type: string
+          enum: [PRACTICE, CHALLENGE]
+        title: { type: string }
+        description: { type: string }
+        requirements:
+          type: array
+          items: { type: string }
+        language: { $ref: '#/components/schemas/Language' }
+        difficulty:
+          type: string
+          enum: [EASY, MEDIUM, HARD]
+        starterCode: { type: string }
+        editableFile: { type: string }
+        files:
+          type: array
+          items:
+            type: object
+            required: [path, content]
+            properties:
+              path: { type: string }
+              content: { type: string }
+        referenceSolution: { type: string }
+        conceptIds:
+          type: array
+          items: { $ref: '#/components/schemas/Uuid' }
+    AdminExercisePatch:
+      type: object
+      minProperties: 1
+      properties:
+        title: { type: string }
+        description: { type: string }
+        requirements:
+          type: array
+          items: { type: string }
+        difficulty:
+          type: string
+          enum: [EASY, MEDIUM, HARD]
+        starterCode: { type: string }
+        files:
+          type: array
+          items:
+            type: object
+            required: [path, content]
+            properties:
+              path: { type: string }
+              content: { type: string }
+        referenceSolution: { type: string }
+        conceptIds:
+          type: array
+          items: { $ref: '#/components/schemas/Uuid' }
+        status: { $ref: '#/components/schemas/ContentStatus' }
+    AdminExercise:
+      allOf:
+        - $ref: '#/components/schemas/AdminExerciseInput'
+        - type: object
+          required: [id, status]
+          properties:
+            id: { $ref: '#/components/schemas/Uuid' }
+            status: { $ref: '#/components/schemas/ContentStatus' }
+    AdminTestCaseInput:
+      type: object
+      required: [inputData, expectedOutput, isSample]
+      properties:
+        inputData: { type: string }
+        expectedOutput: { type: string }
+        isSample: { type: boolean }
+    AdminTestCasePatch:
+      type: object
+      minProperties: 1
+      properties:
+        inputData: { type: string }
+        expectedOutput: { type: string }
+        isSample: { type: boolean }
+    AdminTestCase:
+      allOf:
+        - $ref: '#/components/schemas/AdminTestCaseInput'
+        - type: object
+          required: [id, exerciseId]
+          properties:
+            id: { $ref: '#/components/schemas/Uuid' }
+            exerciseId: { $ref: '#/components/schemas/Uuid' }
+    AdminAssessmentInput:
+      type: object
+      required: [lessonId, title]
+      properties:
+        lessonId: { $ref: '#/components/schemas/Uuid' }
+        title: { type: string }
+    AdminAssessmentPatch:
+      type: object
+      minProperties: 1
+      properties:
+        title: { type: string }
+        status: { $ref: '#/components/schemas/ContentStatus' }
+    AdminAssessment:
+      allOf:
+        - $ref: '#/components/schemas/AdminAssessmentInput'
+        - type: object
+          required: [id, type, status]
+          properties:
+            id: { $ref: '#/components/schemas/Uuid' }
+            type:
+              type: string
+              enum: [QUIZ]
+            status: { $ref: '#/components/schemas/ContentStatus' }
+    AdminQuestionInput:
+      type: object
+      required: [conceptId, prompt, options, correctAnswers, position]
+      properties:
+        conceptId: { $ref: '#/components/schemas/Uuid' }
+        prompt: { type: string }
+        code: { type: string }
+        options:
+          type: array
+          minItems: 2
+          items: { $ref: '#/components/schemas/Option' }
+        correctAnswers:
+          type: array
+          minItems: 1
+          items: { type: string }
+        multipleAnswers: { type: boolean, default: false }
+        explanation: { type: string }
+        position: { type: integer, minimum: 1 }
+    AdminQuestionPatch:
+      type: object
+      minProperties: 1
+      properties:
+        prompt: { type: string }
+        code: { type: string }
+        options:
+          type: array
+          items: { $ref: '#/components/schemas/Option' }
+        correctAnswers:
+          type: array
+          items: { type: string }
+        multipleAnswers: { type: boolean }
+        explanation: { type: string }
+        position: { type: integer, minimum: 1 }
+    AdminQuestion:
+      allOf:
+        - $ref: '#/components/schemas/AdminQuestionInput'
+        - type: object
+          required: [id, assessmentId]
+          properties:
+            id: { $ref: '#/components/schemas/Uuid' }
+            assessmentId: { $ref: '#/components/schemas/Uuid' }
+    AdminUser:
+      type: object
+      required: [id, email, displayName, role, isActive, createdAt]
+      properties:
+        id: { $ref: '#/components/schemas/Uuid' }
+        email: { type: string, format: email }
+        displayName: { type: string }
+        role: { $ref: '#/components/schemas/Role' }
+        isActive: { type: boolean }
+        createdAt: { type: string, format: date-time }
+    AdminStats:
+      type: object
+      required: [from, to, days, budgetAlert]
+      properties:
+        from: { type: string, format: date }
+        to: { type: string, format: date }
+        days:
+          type: array
+          items:
+            type: object
+            required: [date, activeUsers, newLearningPaths, codeRuns, submissions, aiRequests, inputTokens, outputTokens, costUsd]
+            properties:
+              date: { type: string, format: date }
+              activeUsers: { type: integer }
+              newLearningPaths:
+                type: integer
+                description: Replaces "enrollments" in BR-030, which no longer exist; confirm when the admin flow is designed
+              codeRuns: { type: integer }
+              submissions: { type: integer }
+              aiRequests: { type: integer }
+              inputTokens: { type: integer }
+              outputTokens: { type: integer }
+              costUsd: { type: number }
+        budgetAlert:
+          type: object
+          required: [exceeded]
+          properties:
+            exceeded: { type: boolean }
+            dailyBudgetUsd: { type: number, nullable: true }
+    AdminMonitoring:
+      type: object
+      required: [services, sandboxErrorRate, llmErrorRate]
+      properties:
+        services:
+          type: array
+          items:
+            type: object
+            required: [name, status]
+            properties:
+              name:
+                type: string
+                enum: [API, WORKER, CODE_EXECUTION, LLM_PROVIDER, DATABASE, REDIS, VECTOR_STORE, OBJECT_STORAGE]
+              status:
+                type: string
+                enum: [UP, DEGRADED, DOWN, UNKNOWN]
+        sandboxErrorRate: { type: number, minimum: 0, maximum: 1 }
+        llmErrorRate: { type: number, minimum: 0, maximum: 1 }
